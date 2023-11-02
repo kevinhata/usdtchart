@@ -14,17 +14,71 @@ class MyApp extends StatelessWidget {
         appBar: AppBar(
           title: Text('USDT'),
         ),
-        body: TradingViewWidget(),
+        body: WebSocketWidget(),
       ),
     );
   }
 }
 
-class TradingViewWidget extends StatelessWidget {
+class WebSocketWidget extends StatefulWidget {
+  @override
+  _WebSocketWidgetState createState() => _WebSocketWidgetState();
+}
+
+class _WebSocketWidgetState extends State<WebSocketWidget> {
+  final channel = IOWebSocketChannel.connect(
+      'wss://dev-api.hata.io/orderbook/ws/candles?symbol=USDTUSD&resolution=15');
+  bool isWebSocketConnected = false;
+  WebViewController? _webViewController;
+
+  @override
+  void initState() {
+    super.initState();
+
+    channel.stream.listen((data) {
+      if (!isWebSocketConnected) {
+        setState(() {
+          isWebSocketConnected = true;
+        });
+      }
+
+      updateChartWithDataFromWebSocket(data);
+    });
+  }
+
+  void updateChartWithDataFromWebSocket(dynamic data) {
+    if (_webViewController != null) {
+      final script = 'updateChartWithWebSocketData($data);';
+      _webViewController!.evaluateJavascript(script);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final String tradingViewHtml = '''
-    <!-- TradingView Widget BEGIN -->
+    return isWebSocketConnected
+        ? ChartWebView(
+            onWebViewCreated: (WebViewController controller) {
+              _webViewController = controller;
+            },
+          )
+        : Center(
+            child: Text('Connecting to WebSocket...'),
+          );
+  }
+
+  @override
+  void dispose() {
+    channel.sink.close();
+    super.dispose();
+  }
+}
+
+class ChartWebView extends StatelessWidget {
+  final Function(WebViewController) onWebViewCreated;
+
+  ChartWebView({required this.onWebViewCreated});
+  final String tradingViewHtml = '''
+  <!-- TradingView Widget BEGIN -->
     <div class="tradingview-widget-container">
       <div id="tradingview_33ada"></div>
       <div class="tradingview-widget-copyright">
@@ -34,6 +88,8 @@ class TradingViewWidget extends StatelessWidget {
       </div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
       <script type="text/javascript">
+        var socket;
+
         new TradingView.widget({
           "width": 980,
           "height": 610,
@@ -50,8 +106,8 @@ class TradingViewWidget extends StatelessWidget {
           "container_id": "tradingview_33ada",
           "datafeed": {
             "onReady": function(callback) {
-              // WebSocket connection is ready
-              var socket = new WebSocket("wss://dev-api.hata.io/orderbook/ws/candles?symbol=USDTUSD&resolution=15");
+              // Connect to WebSocket
+              socket = new WebSocket("wss://dev-api.hata.io/orderbook/ws/candles?symbol=USDTUSD&resolution=15");
 
               socket.onopen = function() {
                 callback({
@@ -68,21 +124,19 @@ class TradingViewWidget extends StatelessWidget {
 
                 var bars = [];
 
-                
                 for (var i = 0; i < response.length; i++) {
                   bars.push({
-                    time: response[i].time,
-                    open: response[i].open,
-                    high: response[i].high,
-                    low: response[i].low,
-                    close: response[i].close,
-                    volume: response[i].value,
+                    time: response[i].t, 
+                    open: response[i].o, 
+                    high: response[i].h, 
+                    low: response[i].l,  
+                    close: response[i].c,  
+                    volume: response[i].v  
                   });
                 }
 
-                callback({
-                  "bars": bars,
-                });
+              
+                updateChartWithBars(bars);
               };
             },
             "resolveSymbol": function(symbolName, onSymbolResolvedCallback, onResolveErrorCallback) {
@@ -90,61 +144,30 @@ class TradingViewWidget extends StatelessWidget {
             },
           },
         });
+
+        
+        function updateChartWithBars(bars) {
+          if (TradingView && TradingView.onRealtimeCallback) {
+            TradingView.onRealtimeCallback(bars);
+          }
+        }
+
       </script>
     </div>
     <!-- TradingView Widget END -->
   ''';
 
-    return Column(
-      children: [
-        Expanded(
-          child: WebView(
-            initialUrl: '',
-            javascriptMode: JavascriptMode.unrestricted,
-            gestureNavigationEnabled: true,
-            onWebViewCreated: (WebViewController webViewController) {
-              webViewController.loadUrl(
-                Uri.dataFromString(tradingViewHtml, mimeType: 'text/html')
-                    .toString(),
-              );
-            },
-          ),
-        ),
-        WebSocketConnectionWidget(),
-      ],
-    );
-  }
-}
-
-class WebSocketConnectionWidget extends StatefulWidget {
-  @override
-  _WebSocketConnectionWidgetState createState() =>
-      _WebSocketConnectionWidgetState();
-}
-
-class _WebSocketConnectionWidgetState extends State<WebSocketConnectionWidget> {
-  final channel = IOWebSocketChannel.connect(
-      'wss://dev-api.hata.io/orderbook/ws/candles?symbol=USDTUSD&resolution=15');
-
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder(
-      stream: channel.stream,
-      builder: (context, snapshot) {
-        if (snapshot.hasData) {
-          return Text('WebSocket response: ${snapshot.data}');
-        } else if (snapshot.hasError) {
-          return Text('WebSocket error: ${snapshot.error}');
-        } else {
-          return Text('Connecting to WebSocket...');
-        }
+    return WebView(
+      initialUrl: '',
+      javascriptMode: JavascriptMode.unrestricted,
+      gestureNavigationEnabled: true,
+      onWebViewCreated: (WebViewController webViewController) {
+        webViewController.loadUrl(
+          Uri.dataFromString(tradingViewHtml, mimeType: 'text/html').toString(),
+        );
       },
     );
-  }
-
-  @override
-  void dispose() {
-    channel.sink.close();
-    super.dispose();
   }
 }
